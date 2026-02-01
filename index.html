@@ -479,6 +479,10 @@
     </div>
   </div>
 
+<!-- jsPDF for reliable PDF export without invoking the browser print pipeline -->
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
+
 <script>
 /* ---------- Data & Defaults ---------- */
 const CATEGORY_ACTIONS_DEFAULT = {
@@ -722,9 +726,81 @@ btnImport.addEventListener('click', ()=>{
 btnClear.addEventListener('click', openConfirmModal);
 
 btnPrint.addEventListener('click', ()=>{
-  document.getElementById('printSummary').style.display='block';
-  window.print();
-  setTimeout(()=>{ document.getElementById('printSummary').style.display='none'; }, 500);
+  // Generate a true PDF (text/table) instead of invoking the browser print pipeline (avoids Safari print crashes)
+  try{
+    if(!window.jspdf || !window.jspdf.jsPDF){
+      toast('PDF library failed to load. Check network / content blockers.');
+      return;
+    }
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ unit:'pt', format:'letter' });
+    const pageW = doc.internal.pageSize.getWidth();
+    const margin = 40;
+
+    const title = 'After Action Reporter – Timeline Log';
+    doc.setFont('helvetica','bold');
+    doc.setFontSize(16);
+    doc.text(title, margin, 50);
+
+    // Incident meta
+    doc.setFont('helvetica','normal');
+    doc.setFontSize(11);
+    const metaLines = [
+      `Call Type: ${callType.value || '—'}`,
+      `Incident ID: ${incidentId.value || '—'}`,
+      `Category: ${cat.value || '—'}`,
+      `Exported: ${new Date().toLocaleString()}`
+    ];
+    let y = 72;
+    metaLines.forEach(line => { doc.text(line, margin, y); y += 14; });
+
+    // Build rows (sorted ascending)
+    const rows = timeline
+      .slice()
+      .sort((a,b)=> new Date(a.t) - new Date(b.t))
+      .map(e=>{
+        const d = new Date(e.t);
+        const timeStr = (typeof fmtTime === 'function') ? fmtTime(d) : d.toLocaleTimeString();
+        const categoryStr = e?.meta?.category || '';
+        const entryStr = e?.label || '';
+        const loc = e?.meta?.location;
+        const locStr = loc && typeof loc.lat === 'number' && typeof loc.lng === 'number'
+          ? `${loc.lat.toFixed(6)}, ${loc.lng.toFixed(6)}`
+          : '';
+        return [timeStr, categoryStr, entryStr, locStr];
+      });
+
+    // If empty, still export a small PDF
+    if(!rows.length){
+      doc.text('No timeline entries to export.', margin, y + 30);
+      const fname = `AAR_${(incidentId.value||'log').replace(/[^a-z0-9_-]+/gi,'_')}.pdf`;
+      doc.save(fname);
+      return;
+    }
+
+    // Table
+    doc.autoTable({
+      startY: y + 14,
+      head: [['Time', 'Category', 'Entry', 'Location']],
+      body: rows,
+      styles: { font:'helvetica', fontSize: 9, cellPadding: 4, overflow: 'linebreak' },
+      headStyles: { fillColor: [20,20,20], textColor: 255 },
+      alternateRowStyles: { fillColor: [245,245,245] },
+      columnStyles: {
+        0: { cellWidth: 70 },
+        1: { cellWidth: 110 },
+        2: { cellWidth: pageW - margin*2 - 70 - 110 - 140 },
+        3: { cellWidth: 140 }
+      },
+      margin: { left: margin, right: margin }
+    });
+
+    const fname = `AAR_${(incidentId.value||'log').replace(/[^a-z0-9_-]+/gi,'_')}.pdf`;
+    doc.save(fname);
+  }catch(err){
+    console.error(err);
+    toast('PDF export failed. See console.');
+  }
 });
 btnAddNote.addEventListener('click', ()=>{
   const v=(noteText.value||'').trim(); if(!v){ toast('Enter a note'); return; }
